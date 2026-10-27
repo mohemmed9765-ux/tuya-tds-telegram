@@ -7,6 +7,7 @@ IMPORTANT: Do NOT call Manager.unload(): it expires the Tuya terminal token.
 """
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -66,10 +67,31 @@ def save_state(state, cipher):
 
 def load_state():
     cipher = Fernet(os.environ["TUYA_FERNET_KEY"].encode("utf-8"))
+    bootstrap_json = os.environ["TUYA_BOOTSTRAP_SESSION"]
+    bootstrap_fingerprint = hashlib.sha256(
+        bootstrap_json.encode("utf-8")
+    ).hexdigest()
+    session_changed = False
+
     if STATE_FILE.is_file():
         state = json.loads(cipher.decrypt(STATE_FILE.read_bytes()))
     else:
-        state = {"session": json.loads(os.environ["TUYA_BOOTSTRAP_SESSION"])}
+        state = {"session": json.loads(bootstrap_json)}
+        state["bootstrap_fingerprint"] = bootstrap_fingerprint
+
+    # On first deployment (or when the repository secret is replaced),
+    # switch ONLY the Tuya session. Keep the existing bands, notification
+    # flags, consecutive readings and last known successful measurement.
+    if state.get("bootstrap_fingerprint") != bootstrap_fingerprint:
+        fresh_session = json.loads(bootstrap_json)
+        required = ("user_code", "terminal_id", "endpoint", "token_info")
+        if not isinstance(fresh_session, dict) or any(
+            field not in fresh_session for field in required
+        ):
+            raise RuntimeError("INVALID_BOOTSTRAP_SESSION")
+        state["session"] = fresh_session
+        state["bootstrap_fingerprint"] = bootstrap_fingerprint
+        session_changed = True
 
     defaults = {
         "band": None,
@@ -84,6 +106,13 @@ def load_state():
     }
     for key, default_value in defaults.items():
         state.setdefault(key, default_value)
+
+    if session_changed:
+        # Save before contacting Tuya so even a failed run keeps the new
+        # session. GitHub Actions commits this encrypted file on exit.
+        save_state(state, cipher)
+        print("TUYA_SESSION_UPDATED_FROM_SECRET")
+
     return state, cipher
 
 
@@ -147,14 +176,14 @@ def classify(value):
     if value <= 100:
         return "silent", ""
     if value <= 700:
-        return "very_sweet", "الماء جداً حلو"
+        return "very_sweet", "ط§ظ„ظ…ط§ط، ط¬ط¯ط§ظ‹ ط­ظ„ظˆ"
     if value <= 1200:
-        return "sweet", "الماء حلو"
+        return "sweet", "ط§ظ„ظ…ط§ط، ط­ظ„ظˆ"
     if value <= 2000:
-        return "medium", "الماء متوسط الملوحة"
+        return "medium", "ط§ظ„ظ…ط§ط، ظ…طھظˆط³ط· ط§ظ„ظ…ظ„ظˆط­ط©"
     if value <= 3200:
-        return "salty", "الماء مالح"
-    return "very_salty", "الماء شديد الملوحة"
+        return "salty", "ط§ظ„ظ…ط§ط، ظ…ط§ظ„ط­"
+    return "very_salty", "ط§ظ„ظ…ط§ط، ط´ط¯ظٹط¯ ط§ظ„ظ…ظ„ظˆط­ط©"
 
 
 def safe_error_details(error):
@@ -194,13 +223,13 @@ def monitor():
 
         if not state["read_error_sent"]:
             message = (
-                "⚠️ عطل في مراقبة TDS\n"
-                "تعذرت قراءة المستشعر عبر Tuya.\n"
-                f"نوع الخطأ: {kind}\n"
-                f"رمز الخطأ: {code}\n"
-                f"آخر قراءة ناجحة: {state['last_value']}\n"
-                f"وقتها: {state['last_success_at']}\n"
-                f"وقت اكتشاف العطل: {now()}"
+                "âڑ ï¸ڈ ط¹ط·ظ„ ظپظٹ ظ…ط±ط§ظ‚ط¨ط© TDS\n"
+                "طھط¹ط°ط±طھ ظ‚ط±ط§ط،ط© ط§ظ„ظ…ط³طھط´ط¹ط± ط¹ط¨ط± Tuya.\n"
+                f"ظ†ظˆط¹ ط§ظ„ط®ط·ط£: {kind}\n"
+                f"ط±ظ…ط² ط§ظ„ط®ط·ط£: {code}\n"
+                f"ط¢ط®ط± ظ‚ط±ط§ط،ط© ظ†ط§ط¬ط­ط©: {state['last_value']}\n"
+                f"ظˆظ‚طھظ‡ط§: {state['last_success_at']}\n"
+                f"ظˆظ‚طھ ط§ظƒطھط´ط§ظپ ط§ظ„ط¹ط·ظ„: {now()}"
             )
             if send_message("alerts", message):
                 state["read_error_sent"] = True
@@ -215,9 +244,9 @@ def monitor():
     if state["read_error_sent"]:
         if send_message(
             "alerts",
-            "✅ تمت استعادة قراءة مستشعر TDS.\n"
-            f"القراءة الحالية: {value} ppm\n"
-            f"الوقت: {now()}",
+            "âœ… طھظ…طھ ط§ط³طھط¹ط§ط¯ط© ظ‚ط±ط§ط،ط© ظ…ط³طھط´ط¹ط± TDS.\n"
+            f"ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„ط­ط§ظ„ظٹط©: {value} ppm\n"
+            f"ط§ظ„ظˆظ‚طھ: {now()}",
         ):
             state["read_error_sent"] = False
         else:
@@ -233,10 +262,10 @@ def monitor():
     if state["stuck_alert_sent"] and value != state["stuck_value"]:
         if send_message(
             "alerts",
-            "✅ انتهت حالة ثبات قراءة TDS.\n"
-            f"القيمة السابقة: {state['stuck_value']} ppm\n"
-            f"القيمة الحالية: {value} ppm\n"
-            f"الوقت: {now()}",
+            "âœ… ط§ظ†طھظ‡طھ ط­ط§ظ„ط© ط«ط¨ط§طھ ظ‚ط±ط§ط،ط© TDS.\n"
+            f"ط§ظ„ظ‚ظٹظ…ط© ط§ظ„ط³ط§ط¨ظ‚ط©: {state['stuck_value']} ppm\n"
+            f"ط§ظ„ظ‚ظٹظ…ط© ط§ظ„ط­ط§ظ„ظٹط©: {value} ppm\n"
+            f"ط§ظ„ظˆظ‚طھ: {now()}",
         ):
             state["stuck_alert_sent"] = False
             state["stuck_value"] = None
@@ -246,11 +275,11 @@ def monitor():
     if state["same_count"] > 10 and not state["stuck_alert_sent"]:
         if send_message(
             "alerts",
-            "⚠️ تنبيه: قيمة TDS ثابتة!\n"
-            f"القيمة: {value} ppm\n"
-            f"عدد الفحوصات المتطابقة: {state['same_count']}\n"
-            "يرجى التأكد من أن المستشعر يعمل بصورة صحيحة.\n"
-            f"الوقت: {now()}",
+            "âڑ ï¸ڈ طھظ†ط¨ظٹظ‡: ظ‚ظٹظ…ط© TDS ط«ط§ط¨طھط©!\n"
+            f"ط§ظ„ظ‚ظٹظ…ط©: {value} ppm\n"
+            f"ط¹ط¯ط¯ ط§ظ„ظپط­ظˆطµط§طھ ط§ظ„ظ…طھط·ط§ط¨ظ‚ط©: {state['same_count']}\n"
+            "ظٹط±ط¬ظ‰ ط§ظ„طھط£ظƒط¯ ظ…ظ† ط£ظ† ط§ظ„ظ…ط³طھط´ط¹ط± ظٹط¹ظ…ظ„ ط¨طµظˆط±ط© طµط­ظٹط­ط©.\n"
+            f"ط§ظ„ظˆظ‚طھ: {now()}",
         ):
             state["stuck_alert_sent"] = True
             state["stuck_value"] = value
@@ -272,9 +301,9 @@ def monitor():
         state["sent_alerts"] = True
     else:
         message = (
-            f"💧 قيمة TDS: {value} ppm\n"
-            f"🌊 حالة الماء: {description}\n"
-            f"🕒 الوقت: {now()}"
+            f"ًں’§ ظ‚ظٹظ…ط© TDS: {value} ppm\n"
+            f"ًںŒٹ ط­ط§ظ„ط© ط§ظ„ظ…ط§ط،: {description}\n"
+            f"ًں•’ ط§ظ„ظˆظ‚طھ: {now()}"
         )
         if not state["sent_tds"]:
             if send_message("tds", message):
@@ -303,8 +332,8 @@ if __name__ == "__main__":
         print(f"MONITOR_FATAL_{type(error).__name__}")
         send_message(
             "alerts",
-            "🚨 خطأ غير متوقع في برنامج مراقبة TDS.\n"
-            f"نوع الخطأ: {type(error).__name__}\n"
-            f"الوقت: {now()}",
+            "ًںڑ¨ ط®ط·ط£ ط؛ظٹط± ظ…طھظˆظ‚ط¹ ظپظٹ ط¨ط±ظ†ط§ظ…ط¬ ظ…ط±ط§ظ‚ط¨ط© TDS.\n"
+            f"ظ†ظˆط¹ ط§ظ„ط®ط·ط£: {type(error).__name__}\n"
+            f"ط§ظ„ظˆظ‚طھ: {now()}",
         )
         sys.exit(1)
