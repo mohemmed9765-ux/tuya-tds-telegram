@@ -165,7 +165,7 @@ def monitor():
     state, cipher = load_state()
     delivery_failed = False
 
-        try:
+    try:
         value = read_tds(state, cipher)
 
     except Exception as error:
