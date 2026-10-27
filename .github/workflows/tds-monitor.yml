@@ -1,0 +1,60 @@
+name: Tuya TDS Monitor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tuya-tds-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Read TDS and send notifications
+        env:
+          TUYA_BOOTSTRAP_SESSION: ${{ secrets.TUYA_BOOTSTRAP_SESSION }}
+          TUYA_FERNET_KEY: ${{ secrets.TUYA_FERNET_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TDS_GROUP_ID: ${{ secrets.TELEGRAM_TDS_GROUP_ID }}
+          TELEGRAM_ALERTS_GROUP_ID: ${{ secrets.TELEGRAM_ALERTS_GROUP_ID }}
+        run: python monitor.py
+
+      - name: Save encrypted state
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f tds_state.enc ]; then
+            echo "Encrypted state file was not created."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- tds_state.enc
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+          else
+            git commit -m "Save encrypted TDS state [skip ci]"
+            git push origin HEAD:main
+          fi
