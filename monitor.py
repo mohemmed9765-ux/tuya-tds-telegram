@@ -165,10 +165,17 @@ def monitor():
     state, cipher = load_state()
     delivery_failed = False
 
-    try:
+        try:
         value = read_tds(state, cipher)
 
     except Exception as error:
+        error_code = str(getattr(error, "error_code", "UNKNOWN"))
+
+        if not error_code.lstrip("-").isdigit():
+            error_code = "UNKNOWN"
+
+        print(f"TUYA_ERROR_CODE={error_code}")
+
         # لا نعتبر الفحص الفاشل قراءة ناجحة متتالية.
         state["same_count"] = 0
 
