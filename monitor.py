@@ -176,14 +176,14 @@ def classify(value):
     if value <= 100:
         return "silent", ""
     if value <= 700:
-        return "very_sweet", "ط§ظ„ظ…ط§ط، ط¬ط¯ط§ظ‹ ط­ظ„ظˆ"
+        return "very_sweet", "\u0627\u0644\u0645\u0627\u0621 \u062c\u062f\u0627\u064b \u062d\u0644\u0648"
     if value <= 1200:
-        return "sweet", "ط§ظ„ظ…ط§ط، ط­ظ„ظˆ"
+        return "sweet", "\u0627\u0644\u0645\u0627\u0621 \u062d\u0644\u0648"
     if value <= 2000:
-        return "medium", "ط§ظ„ظ…ط§ط، ظ…طھظˆط³ط· ط§ظ„ظ…ظ„ظˆط­ط©"
+        return "medium", "\u0627\u0644\u0645\u0627\u0621 \u0645\u062a\u0648\u0633\u0637 \u0627\u0644\u0645\u0644\u0648\u062d\u0629"
     if value <= 3200:
-        return "salty", "ط§ظ„ظ…ط§ط، ظ…ط§ظ„ط­"
-    return "very_salty", "ط§ظ„ظ…ط§ط، ط´ط¯ظٹط¯ ط§ظ„ظ…ظ„ظˆط­ط©"
+        return "salty", "\u0627\u0644\u0645\u0627\u0621 \u0645\u0627\u0644\u062d"
+    return "very_salty", "\u0627\u0644\u0645\u0627\u0621 \u0634\u062f\u064a\u062f \u0627\u0644\u0645\u0644\u0648\u062d\u0629"
 
 
 def safe_error_details(error):
@@ -212,6 +212,14 @@ def monitor():
     state, cipher = load_state()
     delivery_failed = False
 
+    # One-time resend after repairing text encoding. This verifies that both
+    # Telegram groups receive readable Arabic without resetting the band or
+    # the previous TDS measurement. Subsequent runs remain change-only.
+    if state.get("message_encoding_version") != 2:
+        state["message_encoding_version"] = 2
+        state["sent_tds"] = False
+        state["sent_alerts"] = False
+
     try:
         value = read_tds(state, cipher)
     except Exception as error:
@@ -223,13 +231,13 @@ def monitor():
 
         if not state["read_error_sent"]:
             message = (
-                "âڑ ï¸ڈ ط¹ط·ظ„ ظپظٹ ظ…ط±ط§ظ‚ط¨ط© TDS\n"
-                "طھط¹ط°ط±طھ ظ‚ط±ط§ط،ط© ط§ظ„ظ…ط³طھط´ط¹ط± ط¹ط¨ط± Tuya.\n"
-                f"ظ†ظˆط¹ ط§ظ„ط®ط·ط£: {kind}\n"
-                f"ط±ظ…ط² ط§ظ„ط®ط·ط£: {code}\n"
-                f"ط¢ط®ط± ظ‚ط±ط§ط،ط© ظ†ط§ط¬ط­ط©: {state['last_value']}\n"
-                f"ظˆظ‚طھظ‡ط§: {state['last_success_at']}\n"
-                f"ظˆظ‚طھ ط§ظƒطھط´ط§ظپ ط§ظ„ط¹ط·ظ„: {now()}"
+                "\u26a0\ufe0f \u0639\u0637\u0644 \u0641\u064a \u0645\u0631\u0627\u0642\u0628\u0629 TDS\n"
+                "\u062a\u0639\u0630\u0631\u062a \u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0645\u0633\u062a\u0634\u0639\u0631 \u0639\u0628\u0631 Tuya.\n"
+                f"\u0646\u0648\u0639 \u0627\u0644\u062e\u0637\u0623: {kind}\n"
+                f"\u0631\u0645\u0632 \u0627\u0644\u062e\u0637\u0623: {code}\n"
+                f"\u0622\u062e\u0631 \u0642\u0631\u0627\u0621\u0629 \u0646\u0627\u062c\u062d\u0629: {state['last_value']}\n"
+                f"\u0648\u0642\u062a\u0647\u0627: {state['last_success_at']}\n"
+                f"\u0648\u0642\u062a \u0627\u0643\u062a\u0634\u0627\u0641 \u0627\u0644\u0639\u0637\u0644: {now()}"
             )
             if send_message("alerts", message):
                 state["read_error_sent"] = True
@@ -244,9 +252,9 @@ def monitor():
     if state["read_error_sent"]:
         if send_message(
             "alerts",
-            "âœ… طھظ…طھ ط§ط³طھط¹ط§ط¯ط© ظ‚ط±ط§ط،ط© ظ…ط³طھط´ط¹ط± TDS.\n"
-            f"ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„ط­ط§ظ„ظٹط©: {value} ppm\n"
-            f"ط§ظ„ظˆظ‚طھ: {now()}",
+            "\u2705 \u062a\u0645\u062a \u0627\u0633\u062a\u0639\u0627\u062f\u0629 \u0642\u0631\u0627\u0621\u0629 \u0645\u0633\u062a\u0634\u0639\u0631 TDS.\n"
+            f"\u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {value} ppm\n"
+            f"\u0627\u0644\u0648\u0642\u062a: {now()}",
         ):
             state["read_error_sent"] = False
         else:
@@ -262,10 +270,10 @@ def monitor():
     if state["stuck_alert_sent"] and value != state["stuck_value"]:
         if send_message(
             "alerts",
-            "âœ… ط§ظ†طھظ‡طھ ط­ط§ظ„ط© ط«ط¨ط§طھ ظ‚ط±ط§ط،ط© TDS.\n"
-            f"ط§ظ„ظ‚ظٹظ…ط© ط§ظ„ط³ط§ط¨ظ‚ط©: {state['stuck_value']} ppm\n"
-            f"ط§ظ„ظ‚ظٹظ…ط© ط§ظ„ط­ط§ظ„ظٹط©: {value} ppm\n"
-            f"ط§ظ„ظˆظ‚طھ: {now()}",
+            "\u2705 \u0627\u0646\u062a\u0647\u062a \u062d\u0627\u0644\u0629 \u062b\u0628\u0627\u062a \u0642\u0631\u0627\u0621\u0629 TDS.\n"
+            f"\u0627\u0644\u0642\u064a\u0645\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629: {state['stuck_value']} ppm\n"
+            f"\u0627\u0644\u0642\u064a\u0645\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {value} ppm\n"
+            f"\u0627\u0644\u0648\u0642\u062a: {now()}",
         ):
             state["stuck_alert_sent"] = False
             state["stuck_value"] = None
@@ -275,11 +283,11 @@ def monitor():
     if state["same_count"] > 10 and not state["stuck_alert_sent"]:
         if send_message(
             "alerts",
-            "âڑ ï¸ڈ طھظ†ط¨ظٹظ‡: ظ‚ظٹظ…ط© TDS ط«ط§ط¨طھط©!\n"
-            f"ط§ظ„ظ‚ظٹظ…ط©: {value} ppm\n"
-            f"ط¹ط¯ط¯ ط§ظ„ظپط­ظˆطµط§طھ ط§ظ„ظ…طھط·ط§ط¨ظ‚ط©: {state['same_count']}\n"
-            "ظٹط±ط¬ظ‰ ط§ظ„طھط£ظƒط¯ ظ…ظ† ط£ظ† ط§ظ„ظ…ط³طھط´ط¹ط± ظٹط¹ظ…ظ„ ط¨طµظˆط±ط© طµط­ظٹط­ط©.\n"
-            f"ط§ظ„ظˆظ‚طھ: {now()}",
+            "\u26a0\ufe0f \u062a\u0646\u0628\u064a\u0647: \u0642\u064a\u0645\u0629 TDS \u062b\u0627\u0628\u062a\u0629!\n"
+            f"\u0627\u0644\u0642\u064a\u0645\u0629: {value} ppm\n"
+            f"\u0639\u062f\u062f \u0627\u0644\u0641\u062d\u0648\u0635\u0627\u062a \u0627\u0644\u0645\u062a\u0637\u0627\u0628\u0642\u0629: {state['same_count']}\n"
+            "\u064a\u0631\u062c\u0649 \u0627\u0644\u062a\u0623\u0643\u062f \u0645\u0646 \u0623\u0646 \u0627\u0644\u0645\u0633\u062a\u0634\u0639\u0631 \u064a\u0639\u0645\u0644 \u0628\u0635\u0648\u0631\u0629 \u0635\u062d\u064a\u062d\u0629.\n"
+            f"\u0627\u0644\u0648\u0642\u062a: {now()}",
         ):
             state["stuck_alert_sent"] = True
             state["stuck_value"] = value
@@ -301,9 +309,9 @@ def monitor():
         state["sent_alerts"] = True
     else:
         message = (
-            f"ًں’§ ظ‚ظٹظ…ط© TDS: {value} ppm\n"
-            f"ًںŒٹ ط­ط§ظ„ط© ط§ظ„ظ…ط§ط،: {description}\n"
-            f"ًں•’ ط§ظ„ظˆظ‚طھ: {now()}"
+            f"\U0001f4a7 \u0642\u064a\u0645\u0629 TDS: {value} ppm\n"
+            f"\U0001f30a \u062d\u0627\u0644\u0629 \u0627\u0644\u0645\u0627\u0621: {description}\n"
+            f"\U0001f552 \u0627\u0644\u0648\u0642\u062a: {now()}"
         )
         if not state["sent_tds"]:
             if send_message("tds", message):
@@ -332,8 +340,8 @@ if __name__ == "__main__":
         print(f"MONITOR_FATAL_{type(error).__name__}")
         send_message(
             "alerts",
-            "ًںڑ¨ ط®ط·ط£ ط؛ظٹط± ظ…طھظˆظ‚ط¹ ظپظٹ ط¨ط±ظ†ط§ظ…ط¬ ظ…ط±ط§ظ‚ط¨ط© TDS.\n"
-            f"ظ†ظˆط¹ ط§ظ„ط®ط·ط£: {type(error).__name__}\n"
-            f"ط§ظ„ظˆظ‚طھ: {now()}",
+            "\U0001f6a8 \u062e\u0637\u0623 \u063a\u064a\u0631 \u0645\u062a\u0648\u0642\u0639 \u0641\u064a \u0628\u0631\u0646\u0627\u0645\u062c \u0645\u0631\u0627\u0642\u0628\u0629 TDS.\n"
+            f"\u0646\u0648\u0639 \u0627\u0644\u062e\u0637\u0623: {type(error).__name__}\n"
+            f"\u0627\u0644\u0648\u0642\u062a: {now()}",
         )
         sys.exit(1)
