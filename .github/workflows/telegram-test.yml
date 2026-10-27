@@ -1,0 +1,87 @@
+name: Telegram Connection Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-telegram:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Test Telegram groups
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TDS_GROUP_ID: ${{ secrets.TELEGRAM_TDS_GROUP_ID }}
+          ALERTS_GROUP_ID: ${{ secrets.TELEGRAM_ALERTS_GROUP_ID }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import json
+          import urllib.request
+          import urllib.parse
+
+          token = os.environ.get("BOT_TOKEN", "")
+
+          if not token:
+              raise SystemExit("BOT_TOKEN is missing")
+
+          groups = [
+              (
+                  "TDS_GROUP_ID",
+                  "✅ اختبار الاتصال ناجح.\n"
+                  "💧 مجموعة قراءات TDS جاهزة."
+              ),
+              (
+                  "ALERTS_GROUP_ID",
+                  "✅ اختبار الاتصال ناجح.\n"
+                  "🛠️ مجموعة القراءات والأعطال جاهزة."
+              )
+          ]
+
+          for name, message in groups:
+              chat_id = os.environ.get(name, "")
+
+              if not chat_id:
+                  raise SystemExit(f"Missing secret: {name}")
+
+              data = urllib.parse.urlencode({
+                  "chat_id": chat_id,
+                  "text": message
+              }).encode("utf-8")
+
+              url = (
+                  "https://api.telegram.org/bot"
+                  + token
+                  + "/sendMessage"
+              )
+
+              request = urllib.request.Request(
+                  url,
+                  data=data,
+                  method="POST"
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      request, timeout=15
+                  ) as response:
+                      result = json.load(response)
+
+                  if not result.get("ok"):
+                      raise ValueError("Telegram rejected request")
+
+                  print(f"SUCCESS: {name}")
+
+              except Exception:
+                  print(f"FAILED: {name}")
+                  print(
+                      "Check the group ID and bot permissions."
+                  )
+                  raise SystemExit(1)
+
+          print("Both Telegram groups are ready.")
+          PY
