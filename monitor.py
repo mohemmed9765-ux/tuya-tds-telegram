@@ -175,6 +175,20 @@ def monitor():
             error_code = "UNKNOWN"
 
         print(f"TUYA_ERROR_CODE={error_code}")
+                reason = str(getattr(error, "error_message", "")).lower()
+
+        if "sign invalid" in reason:
+            error_kind = "SIGN_INVALID"
+        elif "qps" in reason or "degrade" in reason:
+            error_kind = "RATE_LIMIT_OR_DEGRADE"
+        elif "token" in reason:
+            error_kind = "TOKEN_ERROR"
+        elif "uri path invalid" in reason:
+            error_kind = "INVALID_API_PATH"
+        else:
+            error_kind = "OTHER"
+
+        print(f"TUYA_ERROR_KIND={error_kind}")
 
         # لا نعتبر الفحص الفاشل قراءة ناجحة متتالية.
         state["same_count"] = 0
