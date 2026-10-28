@@ -46,6 +46,7 @@ jobs:
         run: python monitor.py
 
       - name: Save encrypted monitoring state
+        id: save
         if: always()
         run: |
           if [ -f tds_state.enc ]; then
@@ -61,15 +62,53 @@ jobs:
               echo "No state changes to save"
             fi
           else
-            echo "No encrypted state file found"
+            echo "Encrypted state file missing"
+            exit 1
           fi
 
-      - name: Check monitoring result
+      - name: Report status to Healthchecks
+        if: always()
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+          MONITOR_RESULT: ${{ steps.tds.outcome }}
+          SAVE_RESULT: ${{ steps.save.outcome }}
+        run: |
+          if [ -z "$HEALTHCHECKS_PING_URL" ]; then
+            echo "HEALTHCHECKS_PING_URL is missing"
+            exit 1
+          fi
+
+          if [ "$MONITOR_RESULT" = "success" ] && [ "$SAVE_RESULT" = "success" ]; then
+            echo "Reporting monitoring success"
+            PING_URL="$HEALTHCHECKS_PING_URL"
+          else
+            echo "Reporting monitoring failure"
+            PING_URL="${HEALTHCHECKS_PING_URL%/}/fail"
+          fi
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-delay 2 \
+            --max-time 10 \
+            "$PING_URL"
+
+      - name: Verify monitoring result
         if: always()
         env:
           MONITOR_RESULT: ${{ steps.tds.outcome }}
+          SAVE_RESULT: ${{ steps.save.outcome }}
         run: |
           if [ "$MONITOR_RESULT" != "success" ]; then
             echo "TDS monitoring failed"
             exit 1
           fi
+
+          if [ "$SAVE_RESULT" != "success" ]; then
+            echo "Encrypted state could not be saved"
+            exit 1
+          fi
+
+          echo "Monitoring completed successfully"
