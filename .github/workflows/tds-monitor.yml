@@ -2,6 +2,12 @@ name: Tuya TDS Monitor
 
 on:
   workflow_dispatch:
+    inputs:
+      manual_tds:
+        description: "Send a fresh TDS reading to maintenance group"
+        required: false
+        type: boolean
+        default: false
 
   schedule:
     - cron: "7,27,47 * * * *"
@@ -43,6 +49,7 @@ jobs:
           TELEGRAM_ALERTS_GROUP_ID: ${{ secrets.TELEGRAM_ALERTS_GROUP_ID }}
           TUYA_BOOTSTRAP_SESSION: ${{ secrets.TUYA_BOOTSTRAP_SESSION }}
           TUYA_FERNET_KEY: ${{ secrets.TUYA_FERNET_KEY }}
+          FORCE_READ: ${{ inputs.manual_tds && '1' || '0' }}
         run: python monitor.py
 
       - name: Save encrypted monitoring state
