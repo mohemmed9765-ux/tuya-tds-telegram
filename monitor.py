@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -19,6 +20,12 @@ from tuya_sharing.customerapi import SharingTokenListener
 STATE_FILE = Path("tds_state.enc")
 CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
 
+READ_ATTEMPTS = 3
+RETRY_DELAYS = (10, 20)
+
+SUDDEN_MIN_PPM = 300
+SUDDEN_MIN_PERCENT = 20.0
+
 
 def now():
     return datetime.now(
@@ -29,6 +36,7 @@ def now():
 def send_message(group, message):
     try:
         token = os.environ["TELEGRAM_BOT_TOKEN"]
+
         group_key = (
             "TELEGRAM_TDS_GROUP_ID"
             if group == "tds"
@@ -76,6 +84,7 @@ def load_state():
     )
 
     bootstrap_json = os.environ["TUYA_BOOTSTRAP_SESSION"]
+
     fingerprint = hashlib.sha256(
         bootstrap_json.encode("utf-8")
     ).hexdigest()
@@ -94,6 +103,7 @@ def load_state():
 
     if state.get("bootstrap_fingerprint") != fingerprint:
         fresh = json.loads(bootstrap_json)
+
         required = (
             "user_code",
             "terminal_id",
@@ -120,6 +130,7 @@ def load_state():
         "stuck_value": None,
         "read_error_sent": False,
         "last_success_at": None,
+        "pending_sudden_alert": None,
     }
 
     for key, value in defaults.items():
@@ -155,8 +166,8 @@ def read_tds(state, cipher):
         TokenListener(state, cipher),
     )
 
-    # Never call manager.unload():
-    # it may invalidate the reusable Tuya terminal token.
+    # Do not call manager.unload().
+    # It may invalidate the Tuya terminal token.
     manager.update_device_cache()
 
     devices = [
@@ -193,23 +204,62 @@ def read_tds(state, cipher):
     return int(value)
 
 
+def read_tds_with_retries(state, cipher):
+    last_error = None
+
+    for attempt in range(1, READ_ATTEMPTS + 1):
+        try:
+            value = read_tds(state, cipher)
+            print(f"TUYA_READ_SUCCESS_ATTEMPT={attempt}")
+            return value
+
+        except Exception as error:
+            last_error = error
+            print(
+                f"TUYA_READ_ATTEMPT_FAILED={attempt} "
+                f"TYPE={type(error).__name__}"
+            )
+
+            if attempt < READ_ATTEMPTS:
+                delay = RETRY_DELAYS[attempt - 1]
+                print(f"TUYA_RETRY_WAIT_SECONDS={delay}")
+                time.sleep(delay)
+
+    raise last_error
+
+
 def classify(value):
     if value <= 100:
         return "silent", ""
 
     if value <= 700:
-        return "very_sweet", "\u0627\u0644\u0645\u0627\u0621 \u062c\u062f\u0627\u064b \u062d\u0644\u0648"
+        return (
+            "very_sweet",
+            "\u0627\u0644\u0645\u0627\u0621 \u062c\u062f\u0627\u064b \u062d\u0644\u0648",
+        )
 
     if value <= 1200:
-        return "sweet", "\u0627\u0644\u0645\u0627\u0621 \u062d\u0644\u0648"
+        return (
+            "sweet",
+            "\u0627\u0644\u0645\u0627\u0621 \u062d\u0644\u0648",
+        )
 
     if value <= 2000:
-        return "medium", "\u0627\u0644\u0645\u0627\u0621 \u0645\u062a\u0648\u0633\u0637 \u0627\u0644\u0645\u0644\u0648\u062d\u0629"
+        return (
+            "medium",
+            "\u0627\u0644\u0645\u0627\u0621 \u0645\u062a\u0648\u0633\u0637 \u0627\u0644\u0645\u0644\u0648\u062d\u0629",
+        )
 
     if value <= 3200:
-        return "salty", "\u0627\u0644\u0645\u0627\u0621 \u0645\u0627\u0644\u062d"
+        return (
+            "salty",
+            "\u0627\u0644\u0645\u0627\u0621 \u0645\u0627\u0644\u062d",
+        )
 
-    return "very_salty", "\u0627\u0644\u0645\u0627\u0621 \u0634\u062f\u064a\u062f \u0627\u0644\u0645\u0644\u0648\u062d\u0629"
+    return (
+        "very_salty",
+        "\u0627\u0644\u0645\u0627\u0621 \u0634\u062f\u064a\u062f \u0627\u0644\u0645\u0644\u0648\u062d\u0629",
+    )
 
 
 def safe_error_details(error):
@@ -234,9 +284,98 @@ def safe_error_details(error):
     return code, kind
 
 
+def sudden_change(previous, current):
+    if previous is None:
+        return None
+
+    previous = int(previous)
+    current = int(current)
+
+    difference = current - previous
+    absolute_difference = abs(difference)
+
+    if previous == 0:
+        # Percentage relative to zero is undefined.
+        return None
+
+    percent = absolute_difference / previous * 100.0
+
+    if (
+        absolute_difference >= SUDDEN_MIN_PPM
+        and percent >= SUDDEN_MIN_PERCENT
+    ):
+        return {
+            "previous": previous,
+            "current": current,
+            "difference": difference,
+            "percent": percent,
+            "detected_at": now(),
+            "sent_tds": False,
+            "sent_alerts": False,
+        }
+
+    return None
+
+
+def sudden_change_message(alert):
+    direction = (
+        "\u0627\u0631\u062a\u0641\u0627\u0639"
+        if alert["difference"] > 0
+        else "\u0627\u0646\u062e\u0641\u0627\u0636"
+    )
+
+    signed_difference = f"{alert['difference']:+d}"
+
+    signed_percent = (
+        f"{alert['percent']:+.2f}"
+        if alert["difference"] > 0
+        else f"{-alert['percent']:+.2f}"
+    )
+
+    return (
+        "\U0001f6a8 \u062a\u0646\u0628\u064a\u0647: \u062a\u063a\u064a\u0631 \u0645\u0641\u0627\u062c\u0626 \u0641\u064a TDS!\n"
+        f"\U0001f4a7 \u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629: {alert['previous']} ppm\n"
+        f"\U0001f4a7 \u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {alert['current']} ppm\n"
+        f"\U0001f4c8 \u0645\u0642\u062f\u0627\u0631 \u0627\u0644\u062a\u063a\u064a\u0631: {signed_difference} ppm\n"
+        f"\U0001f4ca \u0646\u0633\u0628\u0629 \u0627\u0644\u062a\u063a\u064a\u0631: {signed_percent}%\n"
+        f"\u0627\u062a\u062c\u0627\u0647 \u0627\u0644\u062a\u063a\u064a\u0631: {direction}\n"
+        f"\U0001f552 \u0648\u0642\u062a \u0627\u0644\u0641\u062d\u0635: {alert['detected_at']}"
+    )
+
+
+def deliver_pending_sudden_alert(state):
+    alert = state.get("pending_sudden_alert")
+
+    if not alert:
+        return True
+
+    message = sudden_change_message(alert)
+    success = True
+
+    if not alert["sent_tds"]:
+        if send_message("tds", message):
+            alert["sent_tds"] = True
+        else:
+            success = False
+
+    if not alert["sent_alerts"]:
+        if send_message("alerts", message):
+            alert["sent_alerts"] = True
+        else:
+            success = False
+
+    if alert["sent_tds"] and alert["sent_alerts"]:
+        state["pending_sudden_alert"] = None
+    else:
+        state["pending_sudden_alert"] = alert
+
+    return success
+
+
 def monitor():
     state, cipher = load_state()
     delivery_failed = False
+
     manual_read = os.environ.get("FORCE_READ") == "1"
 
     if state.get("message_encoding_version") != 2:
@@ -245,7 +384,7 @@ def monitor():
         state["sent_alerts"] = False
 
     try:
-        value = read_tds(state, cipher)
+        value = read_tds_with_retries(state, cipher)
 
     except Exception as error:
         if not manual_read:
@@ -262,6 +401,7 @@ def monitor():
                 "\u062a\u0639\u0630\u0631\u062a \u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0645\u0633\u062a\u0634\u0639\u0631 \u0639\u0628\u0631 Tuya.\n"
                 f"\u0646\u0648\u0639 \u0627\u0644\u062e\u0637\u0623: {kind}\n"
                 f"\u0631\u0645\u0632 \u0627\u0644\u062e\u0637\u0623: {code}\n"
+                f"\u0639\u062f\u062f \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0627\u062a: {READ_ATTEMPTS}\n"
                 f"\u0622\u062e\u0631 \u0642\u0631\u0627\u0621\u0629 \u0646\u0627\u062c\u062d\u0629: {state['last_value']}\n"
                 f"\u0648\u0642\u062a\u0647\u0627: {state['last_success_at']}\n"
                 f"\u0648\u0642\u062a \u0627\u0643\u062a\u0634\u0627\u0641 \u0627\u0644\u0639\u0637\u0644: {now()}"
@@ -288,9 +428,9 @@ def monitor():
         else:
             delivery_failed = True
 
-    # On-demand reading:
-    # Send a fresh result only to the maintenance group.
-    # Do not affect automatic bands, counters, or last_value.
+    # Manual reading:
+    # Send result to maintenance group only.
+    # Do not change automatic counters or last_value.
     if manual_read:
         band, description = classify(value)
 
@@ -319,8 +459,34 @@ def monitor():
 
         return
 
+    # Automatic monitoring:
     previous_value = state["last_value"]
 
+    # First retry any pending sudden-change alert.
+    if not deliver_pending_sudden_alert(state):
+        delivery_failed = True
+
+    # Compare the current automatic reading with
+    # the previous successful automatic reading.
+    new_alert = sudden_change(previous_value, value)
+
+    if new_alert:
+        print(
+            "SUDDEN_CHANGE_DETECTED "
+            f"previous={previous_value} current={value}"
+        )
+
+        # Preserve an older undelivered alert.
+        if state.get("pending_sudden_alert") is None:
+            state["pending_sudden_alert"] = new_alert
+
+            if not deliver_pending_sudden_alert(state):
+                delivery_failed = True
+
+        else:
+            print("SUDDEN_CHANGE_PENDING_PREVIOUS_ALERT")
+
+    # Count identical successful automatic readings.
     if previous_value == value:
         state["same_count"] += 1
     else:
@@ -360,11 +526,13 @@ def monitor():
 
     band, description = classify(value)
 
+    # Send notifications when the salinity category changes.
     if band != state["band"]:
         state["band"] = band
         state["sent_tds"] = False
         state["sent_alerts"] = False
 
+    # Keep the 0-100 ppm automatic range silent.
     if band == "silent":
         state["sent_tds"] = True
         state["sent_alerts"] = True
