@@ -70,8 +70,10 @@ jobs:
             exit 1
           fi
 
-      - name: Report status to Healthchecks
-        if: always()
+      # Report only automatic checks to Healthchecks.
+      # Manual Telegram checks must not reset the monitoring timer.
+      - name: Report automatic monitoring status to Healthchecks
+        if: ${{ always() && inputs.manual_tds != true }}
         env:
           HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
           MONITOR_RESULT: ${{ steps.tds.outcome }}
@@ -83,10 +85,10 @@ jobs:
           fi
 
           if [ "$MONITOR_RESULT" = "success" ] && [ "$SAVE_RESULT" = "success" ]; then
-            echo "Reporting monitoring success"
+            echo "Reporting automatic monitoring success"
             PING_URL="$HEALTHCHECKS_PING_URL"
           else
-            echo "Reporting monitoring failure"
+            echo "Reporting automatic monitoring failure"
             PING_URL="${HEALTHCHECKS_PING_URL%/}/fail"
           fi
 
