@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+import traceback
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -31,6 +32,62 @@ def now():
     return datetime.now(
         ZoneInfo("Asia/Baghdad")
     ).strftime("%Y-%m-%d %H:%M")
+
+
+def run_link():
+    """Construct a safe link without using credentials or exception text."""
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", repository) and run_id.isdigit():
+        return f"https://github.com/{repository}/actions/runs/{run_id}"
+    return "ط؛ظٹط± ظ…طھط§ط­"
+
+
+def failure_location(error):
+    """Report filename, function and line; never export source or locals."""
+    frames = traceback.extract_tb(error.__traceback__)
+    if not frames:
+        return "ط؛ظٹط± ظ…ط­ط¯ط¯", "ط؛ظٹط± ظ…ط­ط¯ط¯ط©", "ط؛ظٹط± ظ…ط­ط¯ط¯"
+    app_frames = [f for f in frames if Path(f.filename).name == "monitor.py"]
+    frame = (app_frames or frames)[-1]
+    return Path(frame.filename).name, frame.name, frame.lineno
+
+
+def error_guidance(kind):
+    guidance = {
+        "SIGN_INVALID": "طھط¹ط°ط± ظ‚ط¨ظˆظ„ طھظپظˆظٹط¶ Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ط£ظˆ ط£ط¹ط¯ ط§ظ„ط±ط¨ط· ط¥ط°ط§ ط§ط³طھظ…ط± ط§ظ„ط®ط·ط£.",
+        "TOKEN_EXPIRED": "ظپط´ظ„ طھط¬ط¯ظٹط¯ ط±ظ…ط² Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ظˆط±ظ…ط² ط§ظ„طھط¬ط¯ظٹط¯.",
+        "RATE_LIMIT": "ظ‚ظٹظˆط¯ ط¹ظ„ظ‰ ط·ظ„ط¨ط§طھ Tuyaط› ط§ظ†طھط¸ط± ط­طھظ‰ ظ…ظˆط¹ط¯ ط§ظ„ظپط­طµ ط§ظ„ظ‚ط§ط¯ظ….",
+        "PERMISSION_DENIED": "ط·ظ„ط¨ Tuya ظ…ط±ظپظˆط¶ط› ط±ط§ط¬ط¹ طµظ„ط§ط­ظٹط© ط§ظ„ط­ط³ط§ط¨ ظˆط§ظ„طھظپظˆظٹط¶.",
+        "TIMEOUT": "ط§ظ†طھظ‡طھ ظ…ظ‡ظ„ط© ط§ظ„ط§طھطµط§ظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط´ط¨ظƒط© ظˆط®ط¯ظ…ط§طھ Tuya.",
+        "TDS_SENSOR_NOT_FOUND": "ظ„ط§ ظٹط¸ظ‡ط± ظ…ط³طھط´ط¹ط± TDS ظپظٹ ط§ظ„ط­ط³ط§ط¨ ط§ظ„ظ…ط±طھط¨ط·.",
+        "MULTIPLE_TDS_SENSORS": "ط¸ظ‡ط± ط£ظƒط«ط± ظ…ظ† ظ…ط³طھط´ط¹ط±ط› ظٹط¬ط¨ طھط­ط¯ظٹط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ط§ظ„ظ…ظ‚طµظˆط¯.",
+        "TDS_SENSOR_OFFLINE": "ط§ظ„ظ…ط³طھط´ط¹ط± ط؛ظٹط± ظ…طھطµظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ظƒظ‡ط±ط¨ط§ط، ظˆط§ظ„ظˆط§ظٹ ظپط§ظٹ.",
+        "INVALID_TDS": "ط£ط¹ط§ط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ظ‚ط±ط§ط،ط© ط؛ظٹط± طµط§ظ„ط­ط©ط› طھط­ظ‚ظ‚ ظ…ظ† ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¬ظ‡ط§ط².",
+    }
+    return guidance.get(kind, "ط±ط§ط¬ط¹ ط±ط§ط¨ط· ط§ظ„طھط´ط؛ظٹظ„ ظپظٹ GitHub ظ„طھط­ط¯ظٹط¯ ط§ظ„ط³ط¨ط¨ ط§ظ„طھظ‚ظ†ظٹ.")
+
+
+def diagnostic_message(error, attempts=None, state=None):
+    code, kind = safe_error_details(error)
+    filename, function, line = failure_location(error)
+    last_value = state.get("last_value") if state else None
+    last_time = state.get("last_success_at") if state else None
+    return (
+        "ًںڑ¨ طھظ‚ط±ظٹط± ط¹ط·ظ„ ظ†ط¸ط§ظ… TDS\n"
+        f"ط§ظ„ظ†ظˆط¹: {kind}\n"
+        f"ط±ظ…ط² ط§ظ„ط®ط·ط£: {code}\n"
+        f"ط§ظ„ط§ط³طھط«ظ†ط§ط،: {type(error).__name__}\n"
+        f"ط§ظ„ظ…ظ„ظپ: {filename}\n"
+        f"ط§ظ„ط¯ط§ظ„ط©: {function}\n"
+        f"ط§ظ„ط³ط·ط±: {line}\n"
+        f"ط§ظ„ظ…ط­ط§ظˆظ„ط§طھ: {attempts if attempts is not None else 'ط؛ظٹط± ظ…ط­ط¯ط¯'}\n"
+        f"ط¢ط®ط± ظ‚ط±ط§ط،ط© ظ†ط§ط¬ط­ط©: {last_value if last_value is not None else 'ط؛ظٹط± ظ…طھط§ط­ط©'} ppm\n"
+        f"ظˆظ‚طھظ‡ط§: {last_time or 'ط؛ظٹط± ظ…طھط§ط­'}\n"
+        f"ظˆظ‚طھ ط§ظƒطھط´ط§ظپ ط§ظ„ط¹ط·ظ„: {now()}\n"
+        f"ط§ظ„ط¥ط¬ط±ط§ط، ط§ظ„ظ…ظ‚طھط±ط­: {error_guidance(kind)}\n"
+        f"طھظپط§طµظٹظ„ ط§ظ„طھط´ط؛ظٹظ„: {run_link()}"
+    )
 
 
 def send_message(group, message):
@@ -275,10 +332,16 @@ def safe_error_details(error):
         kind = "PERMISSION_DENIED"
     elif "timeout" in message or "timed out" in message:
         kind = "TIMEOUT"
+    elif str(error) in {
+        "TDS_SENSOR_NOT_FOUND", "MULTIPLE_TDS_SENSORS",
+        "TDS_SENSOR_OFFLINE", "INVALID_TDS",
+    }:
+        kind = str(error)
     else:
         kind = type(error).__name__
 
-    match = re.search(r"(?<!\d)-?\d{4,}(?!\d)", message)
+    # Restrict extracted error codes; never echo long numeric credentials.
+    match = re.search(r"(?<![\w-])-?\d{4,7}(?!\w)", message)
     code = match.group(0) if match else "UNKNOWN"
 
     return code, kind
@@ -396,16 +459,7 @@ def monitor():
         print(f"TUYA_ERROR_KIND={kind}")
 
         if not state["read_error_sent"]:
-            message = (
-                "\u26a0\ufe0f \u0639\u0637\u0644 \u0641\u064a \u0645\u0631\u0627\u0642\u0628\u0629 TDS\n"
-                "\u062a\u0639\u0630\u0631\u062a \u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0645\u0633\u062a\u0634\u0639\u0631 \u0639\u0628\u0631 Tuya.\n"
-                f"\u0646\u0648\u0639 \u0627\u0644\u062e\u0637\u0623: {kind}\n"
-                f"\u0631\u0645\u0632 \u0627\u0644\u062e\u0637\u0623: {code}\n"
-                f"\u0639\u062f\u062f \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0627\u062a: {READ_ATTEMPTS}\n"
-                f"\u0622\u062e\u0631 \u0642\u0631\u0627\u0621\u0629 \u0646\u0627\u062c\u062d\u0629: {state['last_value']}\n"
-                f"\u0648\u0642\u062a\u0647\u0627: {state['last_success_at']}\n"
-                f"\u0648\u0642\u062a \u0627\u0643\u062a\u0634\u0627\u0641 \u0627\u0644\u0639\u0637\u0644: {now()}"
-            )
+            message = diagnostic_message(error, READ_ATTEMPTS, state)
 
             if send_message("alerts", message):
                 state["read_error_sent"] = True
@@ -418,7 +472,7 @@ def monitor():
 
     if state["read_error_sent"]:
         message = (
-            "\u2705 \u062a\u0645\u062a \u0627\u0633\u062a\u0639\u0627\u062f\u0629 \u0642\u0631\u0627\u0621\u0629 \u0645\u0633\u062a\u0634\u0639\u0631 TDS.\n"
+            "\u2705 طھظ…طھ ط§ط³طھط¹ط§ط¯ط© ظ†ط¸ط§ظ… ظ‚ط±ط§ط،ط© TDS ط¨ط¹ط¯ ط§ظ„ط¹ط·ظ„.\n"
             f"\u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {value} ppm\n"
             f"\u0627\u0644\u0648\u0642\u062a: {now()}"
         )
@@ -577,11 +631,6 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"MONITOR_FATAL_{type(error).__name__}")
 
-        send_message(
-            "alerts",
-            "\U0001f6a8 \u062e\u0637\u0623 \u063a\u064a\u0631 \u0645\u062a\u0648\u0642\u0639 \u0641\u064a \u0628\u0631\u0646\u0627\u0645\u062c \u0645\u0631\u0627\u0642\u0628\u0629 TDS.\n"
-            f"\u0646\u0648\u0639 \u0627\u0644\u062e\u0637\u0623: {type(error).__name__}\n"
-            f"\u0627\u0644\u0648\u0642\u062a: {now()}",
-        )
+        send_message("alerts", diagnostic_message(error))
 
         sys.exit(1)
