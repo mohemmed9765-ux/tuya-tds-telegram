@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -43,7 +44,7 @@ def read_control_state():
     """Fetch maintenance switches securely before reading Tuya."""
     secret = os.environ.get("TDS_CONTROL_SECRET", "")
     if not secret:
-        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE")
+        raise RuntimeError("CONTROL_SECRET_MISSING")
 
     url = os.environ.get("TDS_CONTROL_URL", DEFAULT_CONTROL_URL)
     request = urllib.request.Request(
@@ -54,9 +55,15 @@ def read_control_state():
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             data = json.load(response)
-    except Exception as error:
-        # Never log the URL headers or the authentication token.
-        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE") from error
+    except urllib.error.HTTPError as error:
+        # HTTP status only: never expose the request, headers or token.
+        raise RuntimeError(f"CONTROL_HTTP_{int(error.code)}") from None
+    except (urllib.error.URLError, TimeoutError):
+        raise RuntimeError("CONTROL_NETWORK_ERROR") from None
+    except ValueError:
+        raise RuntimeError("CONTROL_RESPONSE_INVALID") from None
+    except Exception:
+        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE") from None
 
     if not isinstance(data, dict) or not all(
         isinstance(data.get(key), bool)
@@ -687,9 +694,26 @@ if __name__ == "__main__":
         raise
 
     except Exception as error:
-        print(f"MONITOR_FATAL_{type(error).__name__}")
+        # Diagnostic whitelist: no credentials, exception messages or source.
+        safe_codes = {
+            "CONTROL_SECRET_MISSING", "CONTROL_NETWORK_ERROR",
+            "CONTROL_RESPONSE_INVALID", "CONTROL_STATUS_UNAVAILABLE",
+            "CONTROL_STATUS_INVALID", "INVALID_BOOTSTRAP_SESSION",
+        }
+        reason = str(error)
+        if isinstance(error, RuntimeError) and (
+            reason in safe_codes
+            or re.fullmatch(r"CONTROL_HTTP_[1-5][0-9]{2}", reason)
+        ):
+            print(f"MONITOR_FATAL_{reason}")
+        else:
+            print(f"MONITOR_FATAL_{type(error).__name__}")
 
-        if str(error) not in {"CONTROL_STATUS_UNAVAILABLE", "CONTROL_STATUS_INVALID"}:
+        filename, function, line = failure_location(error)
+        if filename in {"monitor.py", "monitor_diagnostic.py"}:
+            print(f"MONITOR_FATAL_LOCATION_{function}_LINE_{line}")
+
+        if not reason.startswith("CONTROL_"):
             send_message("alerts", diagnostic_message(error))
 
         sys.exit(1)
