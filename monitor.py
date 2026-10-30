@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -25,6 +26,8 @@ CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
 
 READ_ATTEMPTS = 3
 RETRY_DELAYS = (10, 20)
+RECOVERY_NOTICE_COOLDOWN_SECONDS = 6 * 60 * 60
+TELEGRAM_RATE_LIMIT_RETRY_MAX_SECONDS = 8
 
 SUDDEN_MIN_PPM = 300
 SUDDEN_MIN_PERCENT = 20.0
@@ -60,14 +63,14 @@ def run_link():
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if re.fullmatch(r"[\w.-]+/[\w.-]+", repository) and run_id.isdigit():
         return f"https://github.com/{repository}/actions/runs/{run_id}"
-    return "غير متاح"
+    return "ط؛ظٹط± ظ…طھط§ط­"
 
 
 def failure_location(error):
     """Report filename, function and line; never export source or locals."""
     frames = traceback.extract_tb(error.__traceback__)
     if not frames:
-        return "غير محدد", "غير محددة", "غير محدد"
+        return "ط؛ظٹط± ظ…ط­ط¯ط¯", "ط؛ظٹط± ظ…ط­ط¯ط¯ط©", "ط؛ظٹط± ظ…ط­ط¯ط¯"
     app_frames = [f for f in frames if Path(f.filename).name == "monitor.py"]
     frame = (app_frames or frames)[-1]
     return Path(frame.filename).name, frame.name, frame.lineno
@@ -75,17 +78,17 @@ def failure_location(error):
 
 def error_guidance(kind):
     guidance = {
-        "SIGN_INVALID": "تعذر قبول تفويض Tuya؛ تحقق من الجلسة أو أعد الربط إذا استمر الخطأ.",
-        "TOKEN_EXPIRED": "فشل تجديد رمز Tuya؛ تحقق من الجلسة ورمز التجديد.",
-        "RATE_LIMIT": "قيود على طلبات Tuya؛ انتظر حتى موعد الفحص القادم.",
-        "PERMISSION_DENIED": "طلب Tuya مرفوض؛ راجع صلاحيات الحساب والتفويض.",
-        "TIMEOUT": "انتهت مهلة الاتصال؛ تحقق من الشبكة وخدمات Tuya.",
-        "TDS_SENSOR_NOT_FOUND": "لا يظهر مستشعر TDS في الحساب المرتبط.",
-        "MULTIPLE_TDS_SENSORS": "ظهر أكثر من مستشعر؛ يجب تحديد المستشعر المقصود.",
-        "TDS_SENSOR_OFFLINE": "المستشعر غير متصل؛ تحقق من الكهرباء والاتصال بالشبكة.",
-        "INVALID_TDS": "أعاد المستشعر قراءة غير صالحة؛ تحقق من بيانات الجهاز.",
+        "SIGN_INVALID": "طھط¹ط°ط± ظ‚ط¨ظˆظ„ طھظپظˆظٹط¶ Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ط£ظˆ ط£ط¹ط¯ ط§ظ„ط±ط¨ط· ط¥ط°ط§ ط§ط³طھظ…ط± ط§ظ„ط®ط·ط£.",
+        "TOKEN_EXPIRED": "ظپط´ظ„ طھط¬ط¯ظٹط¯ ط±ظ…ط² Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ظˆط±ظ…ط² ط§ظ„طھط¬ط¯ظٹط¯.",
+        "RATE_LIMIT": "ظ‚ظٹظˆط¯ ط¹ظ„ظ‰ ط·ظ„ط¨ط§طھ Tuyaط› ط§ظ†طھط¸ط± ط­طھظ‰ ظ…ظˆط¹ط¯ ط§ظ„ظپط­طµ ط§ظ„ظ‚ط§ط¯ظ….",
+        "PERMISSION_DENIED": "ط·ظ„ط¨ Tuya ظ…ط±ظپظˆط¶ط› ط±ط§ط¬ط¹ طµظ„ط§ط­ظٹط§طھ ط§ظ„ط­ط³ط§ط¨ ظˆط§ظ„طھظپظˆظٹط¶.",
+        "TIMEOUT": "ط§ظ†طھظ‡طھ ظ…ظ‡ظ„ط© ط§ظ„ط§طھطµط§ظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط´ط¨ظƒط© ظˆط®ط¯ظ…ط§طھ Tuya.",
+        "TDS_SENSOR_NOT_FOUND": "ظ„ط§ ظٹط¸ظ‡ط± ظ…ط³طھط´ط¹ط± TDS ظپظٹ ط§ظ„ط­ط³ط§ط¨ ط§ظ„ظ…ط±طھط¨ط·.",
+        "MULTIPLE_TDS_SENSORS": "ط¸ظ‡ط± ط£ظƒط«ط± ظ…ظ† ظ…ط³طھط´ط¹ط±ط› ظٹط¬ط¨ طھط­ط¯ظٹط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ط§ظ„ظ…ظ‚طµظˆط¯.",
+        "TDS_SENSOR_OFFLINE": "ط§ظ„ظ…ط³طھط´ط¹ط± ط؛ظٹط± ظ…طھطµظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ظƒظ‡ط±ط¨ط§ط، ظˆط§ظ„ط§طھطµط§ظ„ ط¨ط§ظ„ط´ط¨ظƒط©.",
+        "INVALID_TDS": "ط£ط¹ط§ط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ظ‚ط±ط§ط،ط© ط؛ظٹط± طµط§ظ„ط­ط©ط› طھط­ظ‚ظ‚ ظ…ظ† ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¬ظ‡ط§ط².",
     }
-    return guidance.get(kind, "راجع رابط التشغيل في GitHub لتحديد السبب التقني.")
+    return guidance.get(kind, "ط±ط§ط¬ط¹ ط±ط§ط¨ط· ط§ظ„طھط´ط؛ظٹظ„ ظپظٹ GitHub ظ„طھط­ط¯ظٹط¯ ط§ظ„ط³ط¨ط¨ ط§ظ„طھظ‚ظ†ظٹ.")
 
 
 def diagnostic_message(error, attempts=None, state=None):
@@ -93,20 +96,29 @@ def diagnostic_message(error, attempts=None, state=None):
     filename, function, line = failure_location(error)
     last_value = state.get("last_value") if state else None
     last_time = state.get("last_success_at") if state else None
+    if attempts is None:
+        auto_action = "ظ„ظ… ظٹظڈظ†ظپظ‘ط° ط¥طµظ„ط§ط­ طھظ„ظ‚ط§ط¦ظٹط› ظٹظ„ط²ظ… ظپط­طµ ظ‡ط°ط§ ط§ظ„ط®ط·ط£."
+    else:
+        auto_action = (
+            f"ط£ظڈط¹ظٹط¯طھ ظ…ط­ط§ظˆظ„ط© ظ‚ط±ط§ط،ط© Tuya ط­طھظ‰ {attempts} ظ…ط±ط§طھ "
+            "ط¯ظˆظ† ط¥ط¹ط§ط¯ط© طھط¹ظٹظٹظ† ط§ظ„ظ…ط³طھط´ط¹ط± ط£ظˆ ط­ط°ظپ ط§ظ„ط¬ظ„ط³ط© ط§ظ„ظ…ط´ظپط±ط©."
+        )
     return (
-        "🚨 تقرير عطل نظام TDS\n"
-        f"النوع: {kind}\n"
-        f"رمز الخطأ: {code}\n"
-        f"الاستثناء: {type(error).__name__}\n"
-        f"الملف: {filename}\n"
-        f"الدالة: {function}\n"
-        f"السطر: {line}\n"
-        f"المحاولات: {attempts if attempts is not None else 'غير محدد'}\n"
-        f"آخر قراءة ناجحة: {last_value if last_value is not None else 'غير متاحة'} ppm\n"
-        f"وقتها: {last_time or 'غير متاح'}\n"
-        f"وقت اكتشاف العطل: {now()}\n"
-        f"الإجراء المقترح: {error_guidance(kind)}\n"
-        f"تفاصيل التشغيل: {run_link()}"
+        "ًںڑ¨ طھظ‚ط±ظٹط± ط¹ط·ظ„ ظ†ط¸ط§ظ… TDS\n"
+        f"ط§ظ„ظ†ظˆط¹: {kind}\n"
+        f"ط±ظ…ط² ط§ظ„ط®ط·ط£: {code}\n"
+        f"ط§ظ„ط§ط³طھط«ظ†ط§ط،: {type(error).__name__}\n"
+        f"ط§ظ„ظ…ظ„ظپ: {filename}\n"
+        f"ط§ظ„ط¯ط§ظ„ط©: {function}\n"
+        f"ط§ظ„ط³ط·ط±: {line}\n"
+        f"ط§ظ„ظ…ط­ط§ظˆظ„ط§طھ: {attempts if attempts is not None else 'ط؛ظٹط± ظ…ط­ط¯ط¯'}\n"
+        f"ط§ظ„ط¥ط¬ط±ط§ط، ط§ظ„طھظ„ظ‚ط§ط¦ظٹ: {auto_action}\n"
+        "ط§ظ„ظ†طھظٹط¬ط©: ظ„ظ… ظٹظ†ط¬ط­ ط§ظ„ط§ط³طھط±ط¯ط§ط¯ ظپظٹ ظ‡ط°ظ‡ ط§ظ„ط¯ظˆط±ط©.\n"
+        f"ط¢ط®ط± ظ‚ط±ط§ط،ط© ظ†ط§ط¬ط­ط©: {last_value if last_value is not None else 'ط؛ظٹط± ظ…طھط§ط­ط©'} ppm\n"
+        f"ظˆظ‚طھظ‡ط§: {last_time or 'ط؛ظٹط± ظ…طھط§ط­'}\n"
+        f"ظˆظ‚طھ ط§ظƒطھط´ط§ظپ ط§ظ„ط¹ط·ظ„: {now()}\n"
+        f"ط§ظ„ط¥ط¬ط±ط§ط، ط§ظ„ظ…ظ‚طھط±ط­: {error_guidance(kind)}\n"
+        f"طھظپط§طµظٹظ„ ط§ظ„طھط´ط؛ظٹظ„: {run_link()}"
     )
 
 
@@ -125,34 +137,55 @@ def send_message(group, message):
 
     try:
         token = os.environ["TELEGRAM_BOT_TOKEN"]
-
         group_key = (
             "TELEGRAM_TDS_GROUP_ID"
             if group == "tds"
             else "TELEGRAM_ALERTS_GROUP_ID"
         )
-
         data = urllib.parse.urlencode({
             "chat_id": os.environ[group_key],
             "text": message,
         }).encode("utf-8")
-
         request = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=data,
             method="POST",
         )
-
-        with urllib.request.urlopen(
-            request, timeout=25
-        ) as response:
-            result = json.load(response)
-
-        return result.get("ok") is True
-
     except Exception:
-        print(f"TELEGRAM_SEND_FAILED_{group.upper()}")
+        print(f"TELEGRAM_SEND_CONFIGURATION_FAILED_{group.upper()}")
         return False
+
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                result = json.load(response)
+            if result.get("ok") is True:
+                if attempt == 2:
+                    print(f"SELF_REPAIR_TELEGRAM_429_RECOVERED_{group.upper()}")
+                return True
+            print(f"TELEGRAM_API_NOT_OK_{group.upper()}")
+            return False
+        except urllib.error.HTTPError as error:
+            # A definite HTTP 429 rejects the request. Retrying this one
+            # response is safe; ambiguous network timeouts are NOT retried,
+            # as the first message may already have reached Telegram.
+            print(f"TELEGRAM_HTTP_STATUS_{group.upper()}={error.code}")
+            if error.code != 429 or attempt != 1:
+                return False
+            try:
+                seconds = int(error.headers.get("Retry-After", "2"))
+            except (TypeError, ValueError, AttributeError):
+                seconds = 2
+            if not 0 <= seconds <= TELEGRAM_RATE_LIMIT_RETRY_MAX_SECONDS:
+                print("SELF_REPAIR_TELEGRAM_429_DEFERRED")
+                return False
+            seconds = max(1, seconds)
+            print(f"SELF_REPAIR_TELEGRAM_429_WAIT_SECONDS={seconds}")
+            time.sleep(seconds)
+        except Exception as error:
+            print(f"TELEGRAM_SEND_FAILED_{group.upper()}_{type(error).__name__}")
+            return False
+    return False
 
 
 def save_state(state, cipher):
@@ -220,6 +253,7 @@ def load_state():
         "read_error_sent": False,
         "last_success_at": None,
         "pending_sudden_alert": None,
+        "last_tuya_self_heal_report_at": None,
     }
 
     for key, value in defaults.items():
@@ -300,13 +334,14 @@ def read_tds_with_retries(state, cipher):
         try:
             value = read_tds(state, cipher)
             print(f"TUYA_READ_SUCCESS_ATTEMPT={attempt}")
-            return value
+            return value, attempt
 
         except Exception as error:
             last_error = error
+            _, kind = safe_error_details(error)
             print(
                 f"TUYA_READ_ATTEMPT_FAILED={attempt} "
-                f"TYPE={type(error).__name__}"
+                f"TYPE={type(error).__name__} KIND={kind}"
             )
 
             if attempt < READ_ATTEMPTS:
@@ -315,6 +350,45 @@ def read_tds_with_retries(state, cipher):
                 time.sleep(delay)
 
     raise last_error
+
+
+def report_transient_tuya_recovery(state, attempt, value):
+    """Report successful, bounded self-recovery without flooding maintenance.
+
+    Never change sensor settings, credentials, or a stored Tuya session here.
+    Notification failures are secondary: they do not turn a good TDS read
+    into a bad one. The encrypted state is persisted by monitor().
+    """
+    if attempt <= 1:
+        return
+
+    print(f"SELF_REPAIR_TUYA_READ_RECOVERED_ATTEMPT={attempt}")
+    current_timestamp = int(time.time())
+    last_notice = state.get("last_tuya_self_heal_report_at")
+    try:
+        last_notice = int(last_notice or 0)
+    except (TypeError, ValueError):
+        last_notice = 0
+
+    if current_timestamp - last_notice < RECOVERY_NOTICE_COOLDOWN_SECONDS:
+        print("SELF_REPAIR_TUYA_NOTICE_SUPPRESSED_COOLDOWN")
+        return
+
+    message = (
+        "âœ… ط§ط³طھط±ط¯ط§ط¯ طھظ„ظ‚ط§ط¦ظٹ ط¢ظ…ظ† ظ„ظ‚ط±ط§ط،ط© TDS\n"
+        "ط§ظ„ظ…ظƒظˆظ‘ظ†: Tuya / Python\n"
+        "ط§ظ„ظ…ط´ظƒظ„ط©: طھط¹ط«ط±طھ ط§ظ„ظ…ط­ط§ظˆظ„ط© ط§ظ„ط£ظˆظ„ظ‰ ظ„ظ‚ط±ط§ط،ط© ط§ظ„ظ…ط³طھط´ط¹ط±.\n"
+        f"ط§ظ„ط¥ط¬ط±ط§ط،: ط¥ط¹ط§ط¯ط© ظ…ط­ط§ظˆظ„ط© ط§ظ„ظ‚ط±ط§ط،ط©ط› ظ†ط¬ط­طھ ط§ظ„ظ…ط­ط§ظˆظ„ط© {attempt}/{READ_ATTEMPTS}.\n"
+        f"ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„ظ…ط¤ظƒط¯ط©: {value} ppm\n"
+        "ظ„ظ… طھظڈط؛ظٹظ‘ظژط± ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ظ…ط³طھط´ط¹ط± ط£ظˆ ط¨ظٹط§ظ†ط§طھ ط§ظ„ط§ط¹طھظ…ط§ط¯.\n"
+        f"ط§ظ„ظˆظ‚طھ: {now()}\n"
+        f"ط±ط§ط¨ط· ط§ظ„طھط´ط؛ظٹظ„: {run_link()}"
+    )
+    if send_message("alerts", message):
+        state["last_tuya_self_heal_report_at"] = current_timestamp
+        print("SELF_REPAIR_TUYA_NOTICE_SENT")
+    else:
+        print("SELF_REPAIR_TUYA_NOTICE_FAILED")
 
 
 def classify(value):
@@ -485,7 +559,7 @@ def monitor():
         state["sent_alerts"] = False
 
     try:
-        value = read_tds_with_retries(state, cipher)
+        value, read_attempt = read_tds_with_retries(state, cipher)
 
     except Exception as error:
         if not manual_read:
@@ -508,9 +582,11 @@ def monitor():
         print("SENSOR_READ_FAILED")
         sys.exit(3 if delivery_failed else 2)
 
+    report_transient_tuya_recovery(state, read_attempt, value)
+
     if state["read_error_sent"]:
         message = (
-            "✅ تمت استعادة نظام قراءة TDS بعد العطل.\n"
+            "âœ… طھظ…طھ ط§ط³طھط¹ط§ط¯ط© ظ†ط¸ط§ظ… ظ‚ط±ط§ط،ط© TDS ط¨ط¹ط¯ ط§ظ„ط¹ط·ظ„.\n"
             f"\u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {value} ppm\n"
             f"\u0627\u0644\u0648\u0642\u062a: {now()}"
         )
