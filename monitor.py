@@ -20,6 +20,11 @@ from tuya_sharing.customerapi import SharingTokenListener
 
 STATE_FILE = Path("tds_state.enc")
 CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
+DEFAULT_CONTROL_URL = (
+    "https://tuya-tds-scheduler.mohemmed9765.workers.dev/control-state"
+)
+
+# The Cloudflare control state is authoritative for maintenance operations.
 
 READ_ATTEMPTS = 3
 RETRY_DELAYS = (10, 20)
@@ -32,6 +37,41 @@ def now():
     return datetime.now(
         ZoneInfo("Asia/Baghdad")
     ).strftime("%Y-%m-%d %H:%M")
+
+
+def read_control_state():
+    """Fetch maintenance switches securely before reading Tuya."""
+    secret = os.environ.get("TDS_CONTROL_SECRET", "")
+    if not secret:
+        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE")
+
+    url = os.environ.get("TDS_CONTROL_URL", DEFAULT_CONTROL_URL)
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {secret}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.load(response)
+    except Exception as error:
+        # Never log the URL headers or the authentication token.
+        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE") from error
+
+    if not isinstance(data, dict) or not all(
+        isinstance(data.get(key), bool)
+        for key in ("system_paused", "tds_muted")
+    ):
+        raise RuntimeError("CONTROL_STATUS_INVALID")
+    return data
+
+
+def mark_system_paused_output():
+    """Tell GitHub Actions not to ping Healthchecks for a skipped run."""
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as output:
+            output.write("system_paused=true\n")
 
 
 def run_link():
@@ -91,6 +131,18 @@ def diagnostic_message(error, attempts=None, state=None):
 
 
 def send_message(group, message):
+    try:
+        # Refresh control just before delivery: maintenance can start mid-run.
+        control = read_control_state()
+    except Exception:
+        print("TELEGRAM_SEND_SKIPPED_CONTROL_UNAVAILABLE")
+        return False
+
+    if control["system_paused"] or (group == "tds" and control["tds_muted"]):
+        # A maintenance mute is an intentional skip, not a Telegram failure.
+        print(f"TELEGRAM_SEND_SKIPPED_MAINTENANCE_{group.upper()}")
+        return True
+
     try:
         token = os.environ["TELEGRAM_BOT_TOKEN"]
 
@@ -436,6 +488,12 @@ def deliver_pending_sudden_alert(state):
 
 
 def monitor():
+    control = read_control_state()
+    if control["system_paused"]:
+        mark_system_paused_output()
+        print("SYSTEM_PAUSED_MAINTENANCE_NO_READING")
+        return
+
     state, cipher = load_state()
     delivery_failed = False
 
@@ -631,6 +689,7 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"MONITOR_FATAL_{type(error).__name__}")
 
-        send_message("alerts", diagnostic_message(error))
+        if str(error) not in {"CONTROL_STATUS_UNAVAILABLE", "CONTROL_STATUS_INVALID"}:
+            send_message("alerts", diagnostic_message(error))
 
         sys.exit(1)
