@@ -8,6 +8,16 @@ on:
         required: false
         type: boolean
         default: false
+      system_paused:
+        description: "Safety: check if paused (Cloudflare supplies the real setting)"
+        required: false
+        type: boolean
+        default: true
+      tds_muted:
+        description: "Mute messages to readings group (Cloudflare supplies the setting)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -46,7 +56,8 @@ jobs:
           TELEGRAM_ALERTS_GROUP_ID: ${{ secrets.TELEGRAM_ALERTS_GROUP_ID }}
           TUYA_BOOTSTRAP_SESSION: ${{ secrets.TUYA_BOOTSTRAP_SESSION }}
           TUYA_FERNET_KEY: ${{ secrets.TUYA_FERNET_KEY }}
-          TDS_CONTROL_SECRET: ${{ secrets.TDS_CONTROL_SECRET }}
+          TDS_SYSTEM_PAUSED: ${{ inputs.system_paused && '1' || '0' }}
+          TDS_MUTED: ${{ inputs.tds_muted && '1' || '0' }}
           FORCE_READ: ${{ inputs.manual_tds && '1' || '0' }}
         run: python monitor.py
 
