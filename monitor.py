@@ -7,7 +7,6 @@ import re
 import sys
 import time
 import traceback
-import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -21,11 +20,8 @@ from tuya_sharing.customerapi import SharingTokenListener
 
 STATE_FILE = Path("tds_state.enc")
 CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
-DEFAULT_CONTROL_URL = (
-    "https://tuya-tds-scheduler.mohemmed9765.workers.dev/control-state"
-)
-
-# The Cloudflare control state is authoritative for maintenance operations.
+# Cloudflare reads its KV state and passes a snapshot via workflow_dispatch.
+# Do not make a GitHub -> Cloudflare request: that path was blocked with HTTP 403.
 
 READ_ATTEMPTS = 3
 RETRY_DELAYS = (10, 20)
@@ -41,60 +37,13 @@ def now():
 
 
 def read_control_state():
-    """Fetch maintenance switches securely before reading Tuya."""
-    secret = os.environ.get("TDS_CONTROL_SECRET", "")
-    if not secret:
-        raise RuntimeError("CONTROL_SECRET_MISSING")
-
-    url = os.environ.get("TDS_CONTROL_URL", DEFAULT_CONTROL_URL)
-    # Log only whether the destination was overridden; never log credentials.
-    print(
-        "CONTROL_ENDPOINT_DEFAULT"
-        if url == DEFAULT_CONTROL_URL
-        else "CONTROL_ENDPOINT_OVERRIDE"
-    )
-    request = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {secret}"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            data = json.load(response)
-    except urllib.error.HTTPError as error:
-        # Identify the source of a 403 without printing response contents,
-        # request headers, tokens, or other sensitive information.
-        if error.code == 403:
-            body = error.read(512).strip().lower()
-            if body == b"unauthorized":
-                print("CONTROL_403_WORKER_UNAUTHORIZED")
-            elif b"error 1020" in body or b"access denied" in body:
-                print("CONTROL_403_ACCESS_DENIED_PAGE")
-            elif b"<html" in body or b"<!doctype html" in body:
-                print("CONTROL_403_HTML_PAGE")
-            else:
-                print("CONTROL_403_OTHER_RESPONSE")
-            content_type = error.headers.get("Content-Type", "").lower()
-            if "text/html" in content_type:
-                print("CONTROL_403_CONTENT_TYPE_HTML")
-            elif "text/plain" in content_type:
-                print("CONTROL_403_CONTENT_TYPE_PLAIN")
-            else:
-                print("CONTROL_403_CONTENT_TYPE_OTHER")
-        raise RuntimeError(f"CONTROL_HTTP_{int(error.code)}") from None
-    except (urllib.error.URLError, TimeoutError):
-        raise RuntimeError("CONTROL_NETWORK_ERROR") from None
-    except ValueError:
-        raise RuntimeError("CONTROL_RESPONSE_INVALID") from None
-    except Exception:
-        raise RuntimeError("CONTROL_STATUS_UNAVAILABLE") from None
-
-    if not isinstance(data, dict) or not all(
-        isinstance(data.get(key), bool)
-        for key in ("system_paused", "tds_muted")
-    ):
-        raise RuntimeError("CONTROL_STATUS_INVALID")
-    return data
+    """Read control flags provided by the Cloudflare-triggered GitHub run."""
+    system = os.environ.get("TDS_SYSTEM_PAUSED")
+    muted = os.environ.get("TDS_MUTED")
+    # Fail closed if the workflow was not updated together with monitor.py.
+    if system not in ("0", "1") or muted not in ("0", "1"):
+        raise RuntimeError("CONTROL_INPUT_INVALID")
+    return {"system_paused": system == "1", "tds_muted": muted == "1"}
 
 
 def mark_system_paused_output():
@@ -163,7 +112,7 @@ def diagnostic_message(error, attempts=None, state=None):
 
 def send_message(group, message):
     try:
-        # Refresh control just before delivery: maintenance can start mid-run.
+        # The dispatch snapshot remains fixed throughout this short run.
         control = read_control_state()
     except Exception:
         print("TELEGRAM_SEND_SKIPPED_CONTROL_UNAVAILABLE")
@@ -718,26 +667,9 @@ if __name__ == "__main__":
         raise
 
     except Exception as error:
-        # Diagnostic whitelist: no credentials, exception messages or source.
-        safe_codes = {
-            "CONTROL_SECRET_MISSING", "CONTROL_NETWORK_ERROR",
-            "CONTROL_RESPONSE_INVALID", "CONTROL_STATUS_UNAVAILABLE",
-            "CONTROL_STATUS_INVALID", "INVALID_BOOTSTRAP_SESSION",
-        }
-        reason = str(error)
-        if isinstance(error, RuntimeError) and (
-            reason in safe_codes
-            or re.fullmatch(r"CONTROL_HTTP_[1-5][0-9]{2}", reason)
-        ):
-            print(f"MONITOR_FATAL_{reason}")
-        else:
-            print(f"MONITOR_FATAL_{type(error).__name__}")
+        print(f"MONITOR_FATAL_{type(error).__name__}")
 
-        filename, function, line = failure_location(error)
-        if filename in {"monitor.py", "monitor_diagnostic.py"}:
-            print(f"MONITOR_FATAL_LOCATION_{function}_LINE_{line}")
-
-        if not reason.startswith("CONTROL_"):
+        if str(error) not in {"CONTROL_STATUS_UNAVAILABLE", "CONTROL_STATUS_INVALID"}:
             send_message("alerts", diagnostic_message(error))
 
         sys.exit(1)
