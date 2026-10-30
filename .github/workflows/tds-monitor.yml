@@ -46,6 +46,7 @@ jobs:
           TELEGRAM_ALERTS_GROUP_ID: ${{ secrets.TELEGRAM_ALERTS_GROUP_ID }}
           TUYA_BOOTSTRAP_SESSION: ${{ secrets.TUYA_BOOTSTRAP_SESSION }}
           TUYA_FERNET_KEY: ${{ secrets.TUYA_FERNET_KEY }}
+          TDS_CONTROL_SECRET: ${{ secrets.TDS_CONTROL_SECRET }}
           FORCE_READ: ${{ inputs.manual_tds && '1' || '0' }}
         run: python monitor.py
 
@@ -73,7 +74,7 @@ jobs:
       # Report only automatic checks to Healthchecks.
       # Manual Telegram checks must not reset the monitoring timer.
       - name: Report automatic monitoring status to Healthchecks
-        if: ${{ always() && inputs.manual_tds != true }}
+        if: ${{ always() && inputs.manual_tds != true && steps.tds.outputs.system_paused != 'true' }}
         env:
           HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
           MONITOR_RESULT: ${{ steps.tds.outcome }}
