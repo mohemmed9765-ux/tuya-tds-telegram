@@ -47,6 +47,12 @@ def read_control_state():
         raise RuntimeError("CONTROL_SECRET_MISSING")
 
     url = os.environ.get("TDS_CONTROL_URL", DEFAULT_CONTROL_URL)
+    # Log only whether the destination was overridden; never log credentials.
+    print(
+        "CONTROL_ENDPOINT_DEFAULT"
+        if url == DEFAULT_CONTROL_URL
+        else "CONTROL_ENDPOINT_OVERRIDE"
+    )
     request = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {secret}"},
@@ -56,7 +62,25 @@ def read_control_state():
         with urllib.request.urlopen(request, timeout=15) as response:
             data = json.load(response)
     except urllib.error.HTTPError as error:
-        # HTTP status only: never expose the request, headers or token.
+        # Identify the source of a 403 without printing response contents,
+        # request headers, tokens, or other sensitive information.
+        if error.code == 403:
+            body = error.read(512).strip().lower()
+            if body == b"unauthorized":
+                print("CONTROL_403_WORKER_UNAUTHORIZED")
+            elif b"error 1020" in body or b"access denied" in body:
+                print("CONTROL_403_ACCESS_DENIED_PAGE")
+            elif b"<html" in body or b"<!doctype html" in body:
+                print("CONTROL_403_HTML_PAGE")
+            else:
+                print("CONTROL_403_OTHER_RESPONSE")
+            content_type = error.headers.get("Content-Type", "").lower()
+            if "text/html" in content_type:
+                print("CONTROL_403_CONTENT_TYPE_HTML")
+            elif "text/plain" in content_type:
+                print("CONTROL_403_CONTENT_TYPE_PLAIN")
+            else:
+                print("CONTROL_403_CONTENT_TYPE_OTHER")
         raise RuntimeError(f"CONTROL_HTTP_{int(error.code)}") from None
     except (urllib.error.URLError, TimeoutError):
         raise RuntimeError("CONTROL_NETWORK_ERROR") from None
@@ -87,14 +111,14 @@ def run_link():
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if re.fullmatch(r"[\w.-]+/[\w.-]+", repository) and run_id.isdigit():
         return f"https://github.com/{repository}/actions/runs/{run_id}"
-    return "ط؛ظٹط± ظ…طھط§ط­"
+    return "غير متاح"
 
 
 def failure_location(error):
     """Report filename, function and line; never export source or locals."""
     frames = traceback.extract_tb(error.__traceback__)
     if not frames:
-        return "ط؛ظٹط± ظ…ط­ط¯ط¯", "ط؛ظٹط± ظ…ط­ط¯ط¯ط©", "ط؛ظٹط± ظ…ط­ط¯ط¯"
+        return "غير محدد", "غير محددة", "غير محدد"
     app_frames = [f for f in frames if Path(f.filename).name == "monitor.py"]
     frame = (app_frames or frames)[-1]
     return Path(frame.filename).name, frame.name, frame.lineno
@@ -102,17 +126,17 @@ def failure_location(error):
 
 def error_guidance(kind):
     guidance = {
-        "SIGN_INVALID": "طھط¹ط°ط± ظ‚ط¨ظˆظ„ طھظپظˆظٹط¶ Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ط£ظˆ ط£ط¹ط¯ ط§ظ„ط±ط¨ط· ط¥ط°ط§ ط§ط³طھظ…ط± ط§ظ„ط®ط·ط£.",
-        "TOKEN_EXPIRED": "ظپط´ظ„ طھط¬ط¯ظٹط¯ ط±ظ…ط² Tuyaط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط¬ظ„ط³ط© ظˆط±ظ…ط² ط§ظ„طھط¬ط¯ظٹط¯.",
-        "RATE_LIMIT": "ظ‚ظٹظˆط¯ ط¹ظ„ظ‰ ط·ظ„ط¨ط§طھ Tuyaط› ط§ظ†طھط¸ط± ط­طھظ‰ ظ…ظˆط¹ط¯ ط§ظ„ظپط­طµ ط§ظ„ظ‚ط§ط¯ظ….",
-        "PERMISSION_DENIED": "ط·ظ„ط¨ Tuya ظ…ط±ظپظˆط¶ط› ط±ط§ط¬ط¹ طµظ„ط§ط­ظٹط§طھ ط§ظ„ط­ط³ط§ط¨ ظˆط§ظ„طھظپظˆظٹط¶.",
-        "TIMEOUT": "ط§ظ†طھظ‡طھ ظ…ظ‡ظ„ط© ط§ظ„ط§طھطµط§ظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط´ط¨ظƒط© ظˆط®ط¯ظ…ط§طھ Tuya.",
-        "TDS_SENSOR_NOT_FOUND": "ظ„ط§ ظٹط¸ظ‡ط± ظ…ط³طھط´ط¹ط± TDS ظپظٹ ط§ظ„ط­ط³ط§ط¨ ط§ظ„ظ…ط±طھط¨ط·.",
-        "MULTIPLE_TDS_SENSORS": "ط¸ظ‡ط± ط£ظƒط«ط± ظ…ظ† ظ…ط³طھط´ط¹ط±ط› ظٹط¬ط¨ طھط­ط¯ظٹط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ط§ظ„ظ…ظ‚طµظˆط¯.",
-        "TDS_SENSOR_OFFLINE": "ط§ظ„ظ…ط³طھط´ط¹ط± ط؛ظٹط± ظ…طھطµظ„ط› طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ظƒظ‡ط±ط¨ط§ط، ظˆط§ظ„ط§طھطµط§ظ„ ط¨ط§ظ„ط´ط¨ظƒط©.",
-        "INVALID_TDS": "ط£ط¹ط§ط¯ ط§ظ„ظ…ط³طھط´ط¹ط± ظ‚ط±ط§ط،ط© ط؛ظٹط± طµط§ظ„ط­ط©ط› طھط­ظ‚ظ‚ ظ…ظ† ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¬ظ‡ط§ط².",
+        "SIGN_INVALID": "تعذر قبول تفويض Tuya؛ تحقق من الجلسة أو أعد الربط إذا استمر الخطأ.",
+        "TOKEN_EXPIRED": "فشل تجديد رمز Tuya؛ تحقق من الجلسة ورمز التجديد.",
+        "RATE_LIMIT": "قيود على طلبات Tuya؛ انتظر حتى موعد الفحص القادم.",
+        "PERMISSION_DENIED": "طلب Tuya مرفوض؛ راجع صلاحيات الحساب والتفويض.",
+        "TIMEOUT": "انتهت مهلة الاتصال؛ تحقق من الشبكة وخدمات Tuya.",
+        "TDS_SENSOR_NOT_FOUND": "لا يظهر مستشعر TDS في الحساب المرتبط.",
+        "MULTIPLE_TDS_SENSORS": "ظهر أكثر من مستشعر؛ يجب تحديد المستشعر المقصود.",
+        "TDS_SENSOR_OFFLINE": "المستشعر غير متصل؛ تحقق من الكهرباء والاتصال بالشبكة.",
+        "INVALID_TDS": "أعاد المستشعر قراءة غير صالحة؛ تحقق من بيانات الجهاز.",
     }
-    return guidance.get(kind, "ط±ط§ط¬ط¹ ط±ط§ط¨ط· ط§ظ„طھط´ط؛ظٹظ„ ظپظٹ GitHub ظ„طھط­ط¯ظٹط¯ ط§ظ„ط³ط¨ط¨ ط§ظ„طھظ‚ظ†ظٹ.")
+    return guidance.get(kind, "راجع رابط التشغيل في GitHub لتحديد السبب التقني.")
 
 
 def diagnostic_message(error, attempts=None, state=None):
@@ -121,19 +145,19 @@ def diagnostic_message(error, attempts=None, state=None):
     last_value = state.get("last_value") if state else None
     last_time = state.get("last_success_at") if state else None
     return (
-        "ًںڑ¨ طھظ‚ط±ظٹط± ط¹ط·ظ„ ظ†ط¸ط§ظ… TDS\n"
-        f"ط§ظ„ظ†ظˆط¹: {kind}\n"
-        f"ط±ظ…ط² ط§ظ„ط®ط·ط£: {code}\n"
-        f"ط§ظ„ط§ط³طھط«ظ†ط§ط،: {type(error).__name__}\n"
-        f"ط§ظ„ظ…ظ„ظپ: {filename}\n"
-        f"ط§ظ„ط¯ط§ظ„ط©: {function}\n"
-        f"ط§ظ„ط³ط·ط±: {line}\n"
-        f"ط§ظ„ظ…ط­ط§ظˆظ„ط§طھ: {attempts if attempts is not None else 'ط؛ظٹط± ظ…ط­ط¯ط¯'}\n"
-        f"ط¢ط®ط± ظ‚ط±ط§ط،ط© ظ†ط§ط¬ط­ط©: {last_value if last_value is not None else 'ط؛ظٹط± ظ…طھط§ط­ط©'} ppm\n"
-        f"ظˆظ‚طھظ‡ط§: {last_time or 'ط؛ظٹط± ظ…طھط§ط­'}\n"
-        f"ظˆظ‚طھ ط§ظƒطھط´ط§ظپ ط§ظ„ط¹ط·ظ„: {now()}\n"
-        f"ط§ظ„ط¥ط¬ط±ط§ط، ط§ظ„ظ…ظ‚طھط±ط­: {error_guidance(kind)}\n"
-        f"طھظپط§طµظٹظ„ ط§ظ„طھط´ط؛ظٹظ„: {run_link()}"
+        "🚨 تقرير عطل نظام TDS\n"
+        f"النوع: {kind}\n"
+        f"رمز الخطأ: {code}\n"
+        f"الاستثناء: {type(error).__name__}\n"
+        f"الملف: {filename}\n"
+        f"الدالة: {function}\n"
+        f"السطر: {line}\n"
+        f"المحاولات: {attempts if attempts is not None else 'غير محدد'}\n"
+        f"آخر قراءة ناجحة: {last_value if last_value is not None else 'غير متاحة'} ppm\n"
+        f"وقتها: {last_time or 'غير متاح'}\n"
+        f"وقت اكتشاف العطل: {now()}\n"
+        f"الإجراء المقترح: {error_guidance(kind)}\n"
+        f"تفاصيل التشغيل: {run_link()}"
     )
 
 
@@ -537,7 +561,7 @@ def monitor():
 
     if state["read_error_sent"]:
         message = (
-            "âœ… طھظ…طھ ط§ط³طھط¹ط§ط¯ط© ظ†ط¸ط§ظ… ظ‚ط±ط§ط،ط© TDS ط¨ط¹ط¯ ط§ظ„ط¹ط·ظ„.\n"
+            "✅ تمت استعادة نظام قراءة TDS بعد العطل.\n"
             f"\u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629: {value} ppm\n"
             f"\u0627\u0644\u0648\u0642\u062a: {now()}"
         )
